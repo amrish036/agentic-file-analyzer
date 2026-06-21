@@ -5,23 +5,50 @@ import sys
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from agents.base_agent import BaseAgent, Message, ToolCall, ToolResponse
+# Handle imports for both module and script execution
+if __name__ == "__main__":
+    # When running as a script, add parent directory to sys.path
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, parent_dir)
 
+try:
+    from .base_agent import Message, ToolCall, ToolResponse, LLM
+    BaseAgent = LLM  # BaseAgent is actually the LLM class in base_agent.py
+except ImportError:
+    from base_agent import Message, ToolCall, ToolResponse, LLM
+    BaseAgent = LLM
 
 class FileAnalyzerAgent(BaseAgent):
     """Agent for analyzing files in a directory."""
     
-    def __init__(self, llm_config: Dict[str, Any], working_dir: str = "."):
+    def __init__(self, llm_config: Optional[Dict[str, Any]] = None, working_dir: str = "."):
         """Initialize the file analyzer agent.
         
         Args:
-            llm_config: Configuration for the LLM.
+            llm_config: Configuration for the LLM. If None, uses environment variables.
             working_dir: The working directory to analyze.
         """
-        super().__init__(llm_config)
+        import os
+        from dotenv import load_dotenv, find_dotenv
+        
+        # Load environment variables from .env file
+        env_file = find_dotenv()
+        if env_file:
+            load_dotenv(env_file)
+        
+        # Use llm_config if provided, otherwise use environment variables
+        if llm_config is None:
+            llm_config = {}
+        
+        self.llm = LLM(
+            model=llm_config.get("model", os.getenv("LOCAL_LLM_MODEL", "qwen3.5-9b")),
+            base_url=llm_config.get("base_url", os.getenv("LOCAL_LLM_HOST", "http://localhost:1234/v1")),
+            api_key=llm_config.get("api_key")
+        )
         self.working_dir = working_dir
         self.file_content_cache: Dict[str, str] = {}
         self.tool_results: Dict[str, Any] = {}
+        self.conversation_history: List[Message] = []
     
     def run(self, user_input: str) -> str:
         """Run the file analyzer agent.
@@ -55,7 +82,8 @@ class FileAnalyzerAgent(BaseAgent):
             for tool_call in tool_calls:
                 tool_response = self._execute_tool_call(tool_call)
                 tool_responses.append(tool_response)
-                self.add_message(Message(role="tool", content=tool_response.content, name=tool_call.name))
+                # LM Studio doesn't support 'tool' role, use 'assistant' instead
+                self.add_message(Message(role="assistant", content=tool_response.content, name=tool_call.name))
             
             # Call LLM again with tool responses
             final_response = self._call_llm(self.get_conversation_history())
@@ -139,10 +167,24 @@ Remember to be helpful and provide useful information about the files."""
         Returns:
             The tool response.
         """
-        # Import tools here to avoid circular imports
-        from tools import list_files, read_file, search_files
-        from tools.list_code_definition_names import ListCodeDefinitionNames
         import json
+        import sys
+        from pathlib import Path
+        
+        # Get the working directory for tool execution
+        working_dir = Path(self.working_dir).resolve()
+        
+        # Import tools here to avoid circular imports
+        # Add the tools directory to the path
+        tools_dir = working_dir / "tools"
+        if tools_dir.exists():
+            sys.path.insert(0, str(tools_dir))
+        
+        try:
+            from tools import list_files, read_file, search_files
+            from tools.list_code_definition_names import ListCodeDefinitionNames
+        except ImportError as e:
+            return ToolResponse(content=f"Error importing tools: {str(e)}", tool_call_id=tool_call.call_id or "unknown")
         
         tool_name = tool_call.name
         arguments_str = tool_call.arguments
@@ -184,19 +226,7 @@ Remember to be helpful and provide useful information about the files."""
         Returns:
             The LLM's response.
         """
-        # This is a placeholder implementation
-        # You should replace this with actual LLM integration
-        import json
-        
-        # Convert messages to JSON format for the LLM
-        messages_json = [
-            {"role": msg.role, "content": msg.content, "name": msg.name}
-            for msg in messages
-        ]
-        
-        # For now, just return a placeholder response
-        # In production, you would call the actual LLM API
-        return json.dumps(messages_json)
+        return self.llm._call_llm(messages)
 
 
 if __name__ == "__main__":
@@ -212,11 +242,11 @@ if __name__ == "__main__":
         # Run with specific input
         user_input = " ".join(sys.argv[1:])
         
-        # Create agent with default config
+        # Create agent with default config from environment variables
         agent = FileAnalyzerAgent(
             llm_config={
-                "host": "https://api.example.com",
-                "model": "your-model-name"
+                "model": os.getenv("LOCAL_LLM_MODEL", "your-local-model-name"),
+                "base_url": os.getenv("LOCAL_LLM_HOST", "http://localhost:1234/v1")
             },
             working_dir="."
         )
@@ -233,8 +263,8 @@ if __name__ == "__main__":
         
         agent = FileAnalyzerAgent(
             llm_config={
-                "host": "https://api.example.com",
-                "model": "your-model-name"
+                "model": os.getenv("LOCAL_LLM_MODEL", "your-local-model-name"),
+                "base_url": os.getenv("LOCAL_LLM_HOST", "http://localhost:1234/v1")
             },
             working_dir="."
         )
