@@ -59,7 +59,11 @@ class FileAnalyzerAgent(BaseAgent):
         Returns:
             The agent's response.
         """
-        self.add_message(Message(role="user", content=user_input))
+        # Preprocess user input to handle "this directory" references
+        # Convert "this directory" to "." for the working directory
+        processed_input = user_input.replace("this directory", ".").replace("this directory.", ".")
+        
+        self.add_message(Message(role="user", content=processed_input))
         
         # Add system message
         system_message = Message(
@@ -112,7 +116,7 @@ Rules:
 5. Don't use tools unnecessarily
 
 When using list_files:
-- Specify the directory path (relative to working directory)
+- Specify the directory path (relative to working directory). Use "." for the current working directory or "this directory"
 - Use recursive=true if you want to list all files recursively
 
 When using read_file:
@@ -139,22 +143,31 @@ Remember to be helpful and provide useful information about the files."""
         Returns:
             List of tool calls.
         """
+        import re
         tool_calls = []
         
-        # Simple regex to extract tool calls
-        # This is a basic implementation - you may need to adjust based on the LLM's output format
-        import re
+        # LM Studio returns tool calls in a specific format with 'tool_calls' array
+        # Format: {"tool_calls": [{"id": "...", "type": "function", "function": {"name": "...", "arguments": {...}}}, ...]}
         
-        # Pattern to match tool calls in format: {"name": "...", "arguments": "..."}
-        tool_call_pattern = r'\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*"([^"]+)"\s*\}'
+        # Pattern to match the tool_calls array
+        tool_calls_pattern = r'"tool_calls"\s*:\s*\[(.*?)\]'
         
-        for match in re.finditer(tool_call_pattern, response):
-            tool_call = ToolCall(
-                name=match.group(1),
-                arguments=match.group(2),
-                call_id=f"call_{len(tool_calls)}"
-            )
-            tool_calls.append(tool_call)
+        # Extract the tool_calls array content
+        match = re.search(tool_calls_pattern, response, re.DOTALL)
+        if match:
+            tool_calls_content = match.group(1)
+            
+            # Parse each tool call in the array
+            # Each tool call has: id, type, function (with name and arguments)
+            tool_call_pattern = r'\{\s*"id"\s*:\s*"([^"]+)"\s*,\s*"type"\s*:\s*"([^"]+)"\s*,\s*"function"\s*:\s*\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*"([^"]+)"\s*\}\s*\}'
+            
+            for tc_match in re.finditer(tool_call_pattern, tool_calls_content):
+                tool_call = ToolCall(
+                    name=tc_match.group(3),
+                    arguments=tc_match.group(4),
+                    call_id=tc_match.group(1)
+                )
+                tool_calls.append(tool_call)
         
         return tool_calls
     
@@ -200,10 +213,27 @@ Remember to be helpful and provide useful information about the files."""
         
         try:
             if tool_name == "list_files":
+                # Add working_dir to arguments if not already present
+                if "working_dir" not in arguments:
+                    arguments["working_dir"] = self.working_dir
                 result = list_files.execute(arguments)
             elif tool_name == "read_file":
+                # Add working_dir to arguments if not already present
+                if "working_dir" not in arguments:
+                    arguments["working_dir"] = self.working_dir
+                # Change 'path' to 'file_path' to match the read_file tool's expected parameter
+                if "path" in arguments:
+                    arguments["file_path"] = arguments.pop("path")
                 result = read_file.execute(arguments)
             elif tool_name == "search_files":
+                # Add working_dir to arguments if not already present
+                if "working_dir" not in arguments:
+                    arguments["working_dir"] = self.working_dir
+                # Change 'path' to 'directory_path' and 'pattern' to 'regex_pattern' to match the search_files tool's expected parameters
+                if "path" in arguments:
+                    arguments["directory_path"] = arguments.pop("path")
+                if "pattern" in arguments:
+                    arguments["regex_pattern"] = arguments.pop("pattern")
                 result = search_files.execute(arguments)
             elif tool_name == "list_code_definition_names":
                 result = ListCodeDefinitionNames().execute(arguments)

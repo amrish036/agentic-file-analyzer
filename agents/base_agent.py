@@ -5,6 +5,8 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
 import os
 from dotenv import load_dotenv, find_dotenv
+import json
+import re
 
 
 # Local LLM imports (required)
@@ -174,7 +176,39 @@ class LLM:
     def clear_conversation_history(self):
         """Clear the conversation history."""
         self.conversation_history = []
-
-
-# BaseAgent is actually the LLM class in base_agent.py
-BaseAgent = LLM
+    
+    def _extract_tool_calls(self, response: str) -> List[ToolCall]:
+        """Extract tool calls from the LLM response.
+        
+        Args:
+            response: The LLM's response string.
+            
+        Returns:
+            List of tool calls.
+        """
+        tool_calls = []
+        
+        # LM Studio returns tool calls in a specific format with 'tool_calls' array
+        # Format: {"tool_calls": [{"id": "...", "type": "function", "function": {"name": "...", "arguments": {...}}}, ...]}
+        
+        # Pattern to match the tool_calls array
+        tool_calls_pattern = r'"tool_calls"\s*:\s*\[(.*?)\]'
+        
+        # Extract the tool_calls array content
+        match = re.search(tool_calls_pattern, response, re.DOTALL)
+        if match:
+            tool_calls_content = match.group(1)
+            
+            # Parse each tool call in the array
+            # Each tool call has: id, type, function (with name and arguments)
+            tool_call_pattern = r'\{\s*"id"\s*:\s*"([^"]+)"\s*,\s*"type"\s*:\s*"([^"]+)"\s*,\s*"function"\s*:\s*\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*"([^"]+)"\s*\}\s*\}'
+            
+            for tc_match in re.finditer(tool_call_pattern, tool_calls_content):
+                tool_call = ToolCall(
+                    name=tc_match.group(3),
+                    arguments=tc_match.group(4),
+                    call_id=tc_match.group(1)
+                )
+                tool_calls.append(tool_call)
+        
+        return tool_calls

@@ -40,14 +40,12 @@ class read_file:
                 "lines": []
             }
         
-        # Resolve the path relative to the working directory
-        working_dir = arguments.get("working_dir", os.getcwd())
-        full_path = os.path.join(working_dir, file_path)
-        
         # Check if file_path is absolute
         if os.path.isabs(file_path):
             full_path = file_path
         else:
+            # Resolve the path relative to the working directory
+            working_dir = arguments.get("working_dir", os.getcwd())
             full_path = os.path.join(working_dir, file_path)
         
         if not os.path.exists(full_path):
